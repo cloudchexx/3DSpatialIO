@@ -9,6 +9,7 @@
 // ============================================================
 
 #include "chunk_optimizer.h"
+#include "file_io.h"   // RawFileReader + FSEEK64 / FTELL64 64 位文件定位宏
 
 #include <cstdint>
 #include <cstdio>
@@ -18,7 +19,7 @@
 // ─── 索引表结构体 ───────────────────────────────────────────────
 // 每个 chunk 在文件中对应一条索引记录
 struct C3DRIndexEntry {
-    uint64_t offset;  // 该 chunk 在文件中的字节偏移（从文件起始算起）
+    int64_t offset;  // 该 chunk 在文件中的字节偏移（从文件起始算起），int64_t 与 _fseeki64 签名一致
 };
 
 // ─── C3DR 文件写入 ──────────────────────────────────────────────
@@ -33,6 +34,17 @@ C3DRHeader write_c3dr_file(
     const std::string& path,
     const std::vector<float>& data,
     uint32_t dim_x, uint32_t dim_y, uint32_t dim_z,
+    const ChunkShape& shape);
+
+// ─── 流式写入（大文件支持，内存占用与数据总量解耦） ──────────
+// 从 RawFileReader 按子组流式读取源文件，逐块写入 .c3dr 文件。
+// 内存中仅保留 nc_z 个 chunk 的缓冲区，全程 ≤ 2GB。
+//   out_path : 输出 .c3dr 文件路径
+//   reader   : 已打开并通过校验的源文件读取器
+//   shape    : find_optimal_chunk_shape() 返回的最优切块尺寸
+C3DRHeader write_c3dr_file_stream(
+    const std::string& out_path,
+    RawFileReader& reader,
     const ChunkShape& shape);
 
 // ─── C3DR 文件读取器 ────────────────────────────────────────────

@@ -40,6 +40,10 @@ Args parse_args(int argc, char* argv[]) {
             if (i + 1 < argc) args.elem_size = std::atoi(argv[++i]);
             continue;
         }
+        if (arg == "--skip-bytes") {
+            if (i + 1 < argc) args.skip_bytes = std::strtoull(argv[++i], nullptr, 10);
+            continue;
+        }
 
         if (arg == "--profile") {
             args.do_profile = true;
@@ -67,6 +71,7 @@ void print_usage(const char* prog_name) {
         << "  -o, --output <路径>        输出 .c3dr 文件路径 (默认: <input>.c3dr)\n"
         << "  --dim-x, --dim-y, --dim-z  数据各维度尺寸 (必填)\n"
         << "  --elem-size <N>            元素字节数 (默认: 4 = float32)\n"
+        << "  --skip-bytes <N>           跳过文件头字节数 (默认: 0)\n"
         << "  --profile                  运行内存 Profiling，标定 W_MEM 参数\n"
         << "  --benchmark                落盘后运行切面读取性能回归测试\n"
         << "  -h, --help                 显示本帮助信息\n";

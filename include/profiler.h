@@ -5,11 +5,13 @@
 // ============================================================
 // calibrate_w_mem()：  测量本机"连续大块读"与"随机跳跃读"的耗时比，
 //                      用于校正 cost 函数中的 W_MEM 参数。
-// benchmark_slices()： 写入 .c3dr → 沿 X/Y/Z 三轴分别读取切面，
+// benchmark_slices()： 流式写入 .c3dr → 沿 X/Y/Z 三轴分别读取切面，
 //                      记录耗时并计算 max/min 均衡比。
+//                      （已适配流式架构，通过 RawFileReader 避免全量加载）
 // ============================================================
 
 #include "chunk_optimizer.h"
+#include "file_io.h"  // RawFileReader（流式源文件读取器）
 
 #include <cstdint>
 #include <vector>
@@ -31,15 +33,13 @@ struct SliceBenchResult {
 // 返回值：测得的 random/sequential 耗时比（建议作为下次 W_MEM 初始值）
 double calibrate_w_mem(size_t data_size_mb = 1024);
 
-// ─── 切面读取性能回归 ──────────────────────────────────────────
-// 使用给定的三维数据 + 切块形状，写入临时 .c3dr 文件，
+// ─── 切面读取性能回归（流式架构，内存与数据总量解耦） ──────────
+// 使用 RawFileReader 流式读取源文件，写入临时 .c3dr 文件，
 // 然后分别沿 X / Y / Z 轴各读一个中间层切面，测量耗时。
-//   data  : 原始 float32 数据（行优先，X 最外层）
-//   dim_x/y/z : 原始数据尺寸
-//   shape : 切块形状 (通常由 find_optimal_chunk_shape 给出)
-//   tmp_path : 临时 .c3dr 文件路径
+//   reader  : 已打开的流式源文件读取器（维度信息从中获取）
+//   shape   : 切块形状 (通常由 find_optimal_chunk_shape 给出)
+//   tmp_path: 临时 .c3dr 文件路径（测试后自动删除）
 SliceBenchResult benchmark_slices(
-    const std::vector<float>& data,
-    uint32_t dim_x, uint32_t dim_y, uint32_t dim_z,
+    RawFileReader& reader,
     const ChunkShape& shape,
     const std::string& tmp_path);

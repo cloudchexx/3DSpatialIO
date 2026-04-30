@@ -80,18 +80,28 @@ double calibrate_w_mem(size_t data_size_mb) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// benchmark_slices — 切面读取性能回归测试
+// benchmark_slices — 切面读取性能回归测试（流式架构）
+// ════════════════════════════════════════════════════════════════
+// 改造要点（TODO 6）：
+//   1. 移除 const std::vector<float>& data 依赖，改用 RawFileReader 流式读取
+//   2. 使用 write_c3dr_file_stream() 流式写入临时 .c3dr 文件
+//   3. 数据验证阶段通过 reader.read_region() 按需读取切面，无需全量加载
 // ════════════════════════════════════════════════════════════════
 
 SliceBenchResult benchmark_slices(
-    const std::vector<float>& data,
-    uint32_t dim_x, uint32_t dim_y, uint32_t dim_z,
+    RawFileReader& reader,
     const ChunkShape& shape,
     const std::string& tmp_path)
 {
     SliceBenchResult result;
     result.shape  = shape;
     result.passed = false;
+
+    // 从流式读取器获取维度信息（uint64_t，支持超大文件）
+    uint64_t dim_x = reader.dim_x();
+    uint64_t dim_y = reader.dim_y();
+    uint64_t dim_z = reader.dim_z();
+    uint64_t elem_size = static_cast<uint64_t>(reader.elem_size());
 
     // ── 1. 计算存储膨胀率 ──────────────────────────────────
     int64_t nx = (static_cast<int64_t>(dim_x) + shape.cx - 1) / shape.cx;
@@ -103,45 +113,47 @@ SliceBenchResult benchmark_slices(
     result.storage_ratio = static_cast<double>(pad_x * pad_y * pad_z)
                          / (static_cast<double>(dim_x) * dim_y * dim_z);
 
-    // ── 2. 写入 .c3dr 文件 ─────────────────────────────────
+    // ── 2. 流式写入临时 .c3dr 文件 ─────────────────────────
+    // 使用 write_c3dr_file_stream() 替代原 write_c3dr_file()，
+    // 内存中仅保留 nc_z 个 chunk 的缓冲区，不与数据总量挂钩
     try {
-        write_c3dr_file(tmp_path, data, dim_x, dim_y, dim_z, shape);
+        write_c3dr_file_stream(tmp_path, reader, shape);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "[benchmark] 写入失败: %s\n", e.what());
         return result;
     }
 
-    // ── 3. 打开并读取三个方向的切面 ─────────────────────────
-    C3DRReader reader;
-    if (!reader.open(tmp_path)) {
+    // ── 3. 打开 .c3dr 文件并读取三个方向的切面 ──────────────
+    C3DRReader c3dr_reader;
+    if (!c3dr_reader.open(tmp_path)) {
         std::fprintf(stderr, "[benchmark] 打开 .c3dr 文件失败\n");
         return result;
     }
 
     // 选取中间层切面（避免边界效应）
-    uint32_t mid_x = dim_x / 2;
-    uint32_t mid_y = dim_y / 2;
-    uint32_t mid_z = dim_z / 2;
+    uint64_t mid_x = dim_x / 2;
+    uint64_t mid_y = dim_y / 2;
+    uint64_t mid_z = dim_z / 2;
 
     // 预热：先读一次（消除文件系统缓存冷启动影响）
-    reader.read_x_slice(mid_x);
+    c3dr_reader.read_x_slice(static_cast<uint32_t>(mid_x));
 
     // X 轴切面计时
     auto t0 = std::chrono::high_resolution_clock::now();
-    auto slice_x = reader.read_x_slice(mid_x);
+    auto slice_x = c3dr_reader.read_x_slice(static_cast<uint32_t>(mid_x));
     auto t1 = std::chrono::high_resolution_clock::now();
 
     // Y 轴切面计时
     auto t2 = std::chrono::high_resolution_clock::now();
-    auto slice_y = reader.read_y_slice(mid_y);
+    auto slice_y = c3dr_reader.read_y_slice(static_cast<uint32_t>(mid_y));
     auto t3 = std::chrono::high_resolution_clock::now();
 
     // Z 轴切面计时
     auto t4 = std::chrono::high_resolution_clock::now();
-    auto slice_z = reader.read_z_slice(mid_z);
+    auto slice_z = c3dr_reader.read_z_slice(static_cast<uint32_t>(mid_z));
     auto t5 = std::chrono::high_resolution_clock::now();
 
-    reader.close();
+    c3dr_reader.close();
 
     // 时长为毫秒
     result.tx_ms = static_cast<double>(
@@ -162,17 +174,30 @@ SliceBenchResult benchmark_slices(
     bool balance_ok = (result.balance_ratio > 0.0);  // 只要有结果就算通过
     result.passed = storage_ok && balance_ok;
 
-    // ── 验证数据正确性：比较 X 切面与原始数据的对应切片 ────
+    // ── 验证数据正确性：比较 X 切面与源文件对应区域 ────────
+    // 使用 read_region() 按需读取 X = mid_x 的一个切面（仅 dim_y × dim_z 个元素），
+    // 不依赖全量内存数据
     bool data_ok = true;
     if (!slice_x.empty()) {
-        size_t dim_y_sz = static_cast<size_t>(dim_y);
-        size_t dim_z_sz = static_cast<size_t>(dim_z);
-        // 用原始数据构造 x = mid_x 的切面
-        size_t src_base = static_cast<size_t>(mid_x) * dim_y_sz * dim_z_sz;
-        for (size_t j = 0; j < dim_y_sz * dim_z_sz && data_ok; ++j) {
-            if (std::fabs(slice_x[j] - data[src_base + j]) > 1e-5f) {
-                data_ok = false;
+        size_t slice_elems = static_cast<size_t>(dim_y * dim_z);
+        std::vector<float> ref_slice(slice_elems);
+
+        // 从源文件读取 X = mid_x 的单个 Y-Z 切面
+        // read_region 输出布局：Y 外层、Z 内层，与 read_x_slice 返回布局一致
+        size_t read_bytes = reader.read_region(
+            mid_x, mid_x + 1,      // x 范围：单一平面
+            0, dim_y,              // y 范围：全高
+            0, dim_z,              // z 范围：全宽
+            ref_slice.data());
+
+        if (read_bytes == slice_elems * elem_size) {
+            for (size_t j = 0; j < slice_elems && data_ok; ++j) {
+                if (std::fabs(slice_x[j] - ref_slice[j]) > 1e-5f) {
+                    data_ok = false;
+                }
             }
+        } else {
+            data_ok = false;
         }
     }
 
@@ -181,15 +206,21 @@ SliceBenchResult benchmark_slices(
 
     // ── 5. 输出报告 ─────────────────────────────────────────
     std::printf("\n========== 切面读取性能回归 ==========\n");
-    std::printf("  数据维度:       %u × %u × %u\n", dim_x, dim_y, dim_z);
+    std::printf("  数据维度:       %llu × %llu × %llu\n",
+        static_cast<unsigned long long>(dim_x),
+        static_cast<unsigned long long>(dim_y),
+        static_cast<unsigned long long>(dim_z));
     std::printf("  切块形状:       %d × %d × %d\n", shape.cx, shape.cy, shape.cz);
     std::printf("  存储膨胀率:     %.4f  (%s)\n",
         result.storage_ratio,
         storage_ok ? "通过 ≤" : "超标 >");
     std::printf("---------------------------------------\n");
-    std::printf("  X 切面 (%u):    %.3f ms\n", mid_x, result.tx_ms);
-    std::printf("  Y 切面 (%u):    %.3f ms\n", mid_y, result.ty_ms);
-    std::printf("  Z 切面 (%u):    %.3f ms\n", mid_z, result.tz_ms);
+    std::printf("  X 切面 (%llu):  %.3f ms\n",
+        static_cast<unsigned long long>(mid_x), result.tx_ms);
+    std::printf("  Y 切面 (%llu):  %.3f ms\n",
+        static_cast<unsigned long long>(mid_y), result.ty_ms);
+    std::printf("  Z 切面 (%llu):  %.3f ms\n",
+        static_cast<unsigned long long>(mid_z), result.tz_ms);
     std::printf("  均衡比(max/min): %.4f\n", result.balance_ratio);
     std::printf("  数据正确性:      %s\n", data_ok ? "通过" : "失败");
     std::printf("=======================================\n\n");

@@ -10,6 +10,7 @@ struct Args {
     uint32_t    dim_y = 0;
     uint32_t    dim_z = 0;
     int         elem_size = 4;     // 元素字节数（默认 float = 4）
+    uint64_t    skip_bytes = 0;    // 跳过文件头字节数（默认 0）
     bool        show_help  = false;
     bool        do_profile = false;  // 运行内存 Profiling
     bool        do_bench   = false;  // 运行切面读取性能回归
