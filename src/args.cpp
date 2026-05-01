@@ -45,6 +45,12 @@ Args parse_args(int argc, char* argv[]) {
             continue;
         }
 
+        if (arg == "--cache-size") {
+            if (i + 1 < argc) args.cache_size_mb = std::strtoull(argv[++i], nullptr, 10);
+            if (args.cache_size_mb < 2048) args.cache_size_mb = 2048;
+            continue;
+        }
+
         if (arg == "--profile") {
             args.do_profile = true;
             continue;
@@ -72,6 +78,7 @@ void print_usage(const char* prog_name) {
         << "  --dim-x, --dim-y, --dim-z  数据各维度尺寸 (必填)\n"
         << "  --elem-size <N>            元素字节数 (默认: 4 = float32)\n"
         << "  --skip-bytes <N>           跳过文件头字节数 (默认: 0)\n"
+        << "  --cache-size <N>           内存缓存大小(MB)，最小 2048，默认 2048\n"
         << "  --profile                  运行内存 Profiling，标定 W_MEM 参数\n"
         << "  --benchmark                落盘后运行切面读取性能回归测试\n"
         << "  -h, --help                 显示本帮助信息\n";

@@ -335,7 +335,7 @@ C3DRHeader write_c3dr_file_stream(
 // ════════════════════════════════════════════════════════════════
 
 C3DRReader::C3DRReader()
-    : m_file(nullptr), m_nc_x(0), m_nc_y(0), m_nc_z(0)
+    : m_file(nullptr), m_nc_x(0), m_nc_y(0), m_nc_z(0), m_chunk_bytes(0)
 {}
 
 C3DRReader::~C3DRReader() {
@@ -375,6 +375,11 @@ bool C3DRReader::open(const std::string& path) {
     m_nc_y = idx_header[1];
     m_nc_z = idx_header[2];
 
+    m_chunk_bytes = static_cast<size_t>(m_header.chunk_shape.cx)
+                  * m_header.chunk_shape.cy
+                  * m_header.chunk_shape.cz
+                  * sizeof(float);
+
     uint64_t total_chunks = static_cast<uint64_t>(m_nc_x) * m_nc_y * m_nc_z;
     m_index.resize(total_chunks);
 
@@ -398,21 +403,18 @@ void C3DRReader::close() {
     }
     m_index.clear();
     m_nc_x = m_nc_y = m_nc_z = 0;
+    m_chunk_bytes = 0;
 }
 
 // ─── 辅助：按 chunk 线性索引读取一个分块 ─────────────────────
-std::vector<float> C3DRReader::read_chunk_by_index(uint64_t chunk_idx) {
-    if (chunk_idx >= m_index.size()) return {};
+std::shared_ptr<const std::vector<float>>
+C3DRReader::read_chunk_by_index(uint64_t chunk_idx) {
+    size_t total = m_chunk_bytes / sizeof(float);
+    auto buf = std::make_shared<std::vector<float>>(total, 0.0f);
+    if (chunk_idx >= m_index.size()) return buf;
     uint64_t offset = m_index[chunk_idx].offset;
-    size_t   cx     = static_cast<size_t>(m_header.chunk_shape.cx);
-    size_t   cy     = static_cast<size_t>(m_header.chunk_shape.cy);
-    size_t   cz     = static_cast<size_t>(m_header.chunk_shape.cz);
-    size_t   total  = cx * cy * cz;
-
-    std::vector<float> buf(total, 0.0f);
-
     if (FSEEK64(m_file, static_cast<int64_t>(offset), SEEK_SET) != 0) return buf;
-    fread(buf.data(), sizeof(float), total, m_file);
+    fread(buf->data(), sizeof(float), total, m_file);
     return buf;
 }
 
@@ -421,7 +423,8 @@ std::vector<float> C3DRReader::read_chunk(uint32_t ix, uint32_t iy, uint32_t iz)
     uint64_t idx = static_cast<uint64_t>(ix) * m_nc_y * m_nc_z
                  + static_cast<uint64_t>(iy) * m_nc_z
                  + iz;
-    return read_chunk_by_index(idx);
+    auto ptr = read_chunk_by_index(idx);
+    return ptr ? *ptr : std::vector<float>();
 }
 
 // ─── X 轴切面（固定 x，取整个 y-z 平面） ──────────────────────
@@ -450,11 +453,9 @@ std::vector<float> C3DRReader::read_x_slice(uint32_t x) {
                                + iz;
 
             auto chunk = read_chunk_by_index(chunk_idx);
-            if (chunk.empty()) continue;
+            if (!chunk || chunk->empty()) continue;
 
-            // X 切面在该 chunk 中的位置: local_x * cy * cz
-            // 这是一段连续内存（cy * cz 个 float）
-            const float* src = chunk.data() + static_cast<size_t>(local_x) * cy * cz;
+            const float* src = chunk->data() + static_cast<size_t>(local_x) * cy * cz;
 
             // 将这段平面放置到输出缓冲的正确位置
             uint32_t y_end = (std::min)(y_start + static_cast<uint32_t>(cy),
@@ -502,11 +503,7 @@ std::vector<float> C3DRReader::read_y_slice(uint32_t y) {
                                + iz;
 
             auto chunk = read_chunk_by_index(chunk_idx);
-            if (chunk.empty()) continue;
-
-            // Y 切面在该 chunk 中位于 local_y 行
-            // 对于每个 local_x，偏移 = local_x * cy * cz + local_y * cz
-            // 即每 cx 行取一行，跨度为 cy * cz；每行内连续 cz 个 float
+            if (!chunk || chunk->empty()) continue;
 
             uint32_t x_end = (std::min)(x_start + static_cast<uint32_t>(cx),
                                         static_cast<uint32_t>(dim_x));
@@ -515,7 +512,7 @@ std::vector<float> C3DRReader::read_y_slice(uint32_t y) {
 
             for (uint32_t xx = x_start; xx < x_end; ++xx) {
                 uint32_t local_x = xx - x_start;
-                const float* src = chunk.data()
+                const float* src = chunk->data()
                     + static_cast<size_t>(local_x) * cy * cz
                     + static_cast<size_t>(local_y) * cz;
                 size_t dst_base = static_cast<size_t>(xx) * dim_z + z_start;
@@ -553,12 +550,7 @@ std::vector<float> C3DRReader::read_z_slice(uint32_t z) {
                                + iz;
 
             auto chunk = read_chunk_by_index(chunk_idx);
-            if (chunk.empty()) continue;
-
-            // Z 切面在该 chunk 中：需要逐元素跳跃读取
-            // chunk[local_x][local_y][local_z]
-            //   偏移 = local_x * cy * cz + local_y * cz + local_z
-            // 对于固定 local_z，每个 (local_x, local_y) 的元素间距为 cz
+            if (!chunk || chunk->empty()) continue;
 
             uint32_t x_end = (std::min)(x_start + static_cast<uint32_t>(cx),
                                         static_cast<uint32_t>(dim_x));
@@ -571,7 +563,7 @@ std::vector<float> C3DRReader::read_z_slice(uint32_t z) {
 
                 for (uint32_t yy = y_start; yy < y_end; ++yy) {
                     uint32_t local_y = yy - y_start;
-                    result[dst_row + yy - y_start] = chunk[
+                    result[dst_row + yy - y_start] = (*chunk)[
                         static_cast<size_t>(local_x) * cy * cz
                         + static_cast<size_t>(local_y) * cz
                         + local_z];

@@ -1,5 +1,6 @@
 #include "profiler.h"
 #include "chunk_io.h"
+#include "cache_reader.h"
 
 #include <algorithm>
 #include <chrono>
@@ -227,6 +228,227 @@ SliceBenchResult benchmark_slices(
 
     // 把数据正确性也计入 passed
     result.passed = result.passed && data_ok;
+
+    return result;
+}
+
+CacheSliceBenchResult benchmark_slices_cache(
+    RawFileReader& reader,
+    const ChunkShape& shape,
+    const std::string& tmp_path,
+    size_t cache_size_bytes)
+{
+    CacheSliceBenchResult result;
+    result.shape  = shape;
+    result.passed = false;
+
+    uint64_t dim_x = reader.dim_x();
+    uint64_t dim_y = reader.dim_y();
+    uint64_t dim_z = reader.dim_z();
+    uint64_t elem_size = static_cast<uint64_t>(reader.elem_size());
+
+    int64_t nx = (static_cast<int64_t>(dim_x) + shape.cx - 1) / shape.cx;
+    int64_t ny = (static_cast<int64_t>(dim_y) + shape.cy - 1) / shape.cy;
+    int64_t nz = (static_cast<int64_t>(dim_z) + shape.cz - 1) / shape.cz;
+    int64_t pad_x = nx * shape.cx;
+    int64_t pad_y = ny * shape.cy;
+    int64_t pad_z = nz * shape.cz;
+    result.storage_ratio = static_cast<double>(pad_x * pad_y * pad_z)
+                         / (static_cast<double>(dim_x) * dim_y * dim_z);
+
+    try {
+        write_c3dr_file_stream(tmp_path, reader, shape);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "[cache-bench] 写入失败: %s\n", e.what());
+        return result;
+    }
+
+    C3DRCacheReader cache_reader(cache_size_bytes);
+    if (!cache_reader.open(tmp_path)) {
+        std::fprintf(stderr, "[cache-bench] 打开 .c3dr 文件失败\n");
+        return result;
+    }
+
+    uint64_t mid_x = dim_x / 2;
+    uint64_t mid_y = dim_y / 2;
+    uint64_t mid_z = dim_z / 2;
+
+    // ── 读测试 ─────────────────────────────────────────────
+    cache_reader.read_x_slice(static_cast<uint32_t>(mid_x));
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+    auto slice_x = cache_reader.read_x_slice(static_cast<uint32_t>(mid_x));
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    auto t2 = std::chrono::high_resolution_clock::now();
+    auto slice_y = cache_reader.read_y_slice(static_cast<uint32_t>(mid_y));
+    auto t3 = std::chrono::high_resolution_clock::now();
+
+    auto t4 = std::chrono::high_resolution_clock::now();
+    auto slice_z = cache_reader.read_z_slice(static_cast<uint32_t>(mid_z));
+    auto t5 = std::chrono::high_resolution_clock::now();
+
+    result.tx_ms = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count()) / 1000.0;
+    result.ty_ms = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count()) / 1000.0;
+    result.tz_ms = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(t5 - t4).count()) / 1000.0;
+
+    double max_t = (std::max)({result.tx_ms, result.ty_ms, result.tz_ms});
+    double min_t = (std::min)({result.tx_ms, result.ty_ms, result.tz_ms});
+    result.balance_ratio = (min_t > 0.0) ? (max_t / min_t) : 0.0;
+
+    // ── 写测试：写回 X 中间层 ──────────────────────────────
+    bool write_ok = false;
+    bool cow_ok = false;
+    double write_ms = 0.0;
+
+    if (!slice_x.empty()) {
+        auto t6 = std::chrono::high_resolution_clock::now();
+        cache_reader.write_x_slice(static_cast<uint32_t>(mid_x), slice_x);
+        auto t7 = std::chrono::high_resolution_clock::now();
+        write_ms = static_cast<double>(
+            std::chrono::duration_cast<std::chrono::microseconds>(t7 - t6).count()) / 1000.0;
+        write_ok = true;
+
+        // ── 写后读一致性验证 ────────────────────────────────
+        auto slice_x_back = cache_reader.read_x_slice(static_cast<uint32_t>(mid_x));
+        bool readback_ok = true;
+        if (slice_x_back.size() != slice_x.size()) {
+            readback_ok = false;
+        } else {
+            for (size_t j = 0; j < slice_x.size() && readback_ok; ++j) {
+                if (std::fabs(slice_x_back[j] - slice_x[j]) > 1e-5f) {
+                    readback_ok = false;
+                }
+            }
+        }
+        write_ok = readback_ok;
+
+        // ── COW 安全性测试 ────────────────────────────────
+        cow_ok = true;
+        uint32_t cow_x = (mid_x + 1 < dim_x) ? static_cast<uint32_t>(mid_x + 1)
+                                               : static_cast<uint32_t>(0);
+        auto before = cache_reader.read_x_slice(cow_x);
+        std::vector<float> modified_data(before.size(), 999.0f);
+        cache_reader.write_x_slice(cow_x, modified_data);
+        auto after = cache_reader.read_x_slice(cow_x);
+        if (before.size() != after.size()) {
+            cow_ok = false;
+        } else {
+            bool before_unchanged = true;
+            for (size_t j = 0; j < before.size() && before_unchanged; ++j) {
+                if (std::fabs(after[j] - modified_data[j]) > 1e-5f) {
+                    before_unchanged = false;
+                }
+            }
+            if (!before_unchanged) cow_ok = false;
+        }
+    }
+    result.write_ms = write_ms;
+    result.write_ok = write_ok;
+    result.cow_ok = cow_ok;
+
+    // ── Flush 测试 ────────────────────────────────────────
+    auto t8 = std::chrono::high_resolution_clock::now();
+    cache_reader.flush();
+    auto t9 = std::chrono::high_resolution_clock::now();
+    result.flush_ms = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(t9 - t8).count()) / 1000.0;
+
+    // ── 缓存统计 ──────────────────────────────────────────
+    result.hits = cache_reader.cache_hits();
+    result.misses = cache_reader.cache_misses();
+    result.dirty_chunks = cache_reader.dirty_count();
+    result.cache_mem_usage = cache_reader.cache_memory_usage();
+    result.cache_capacity = cache_reader.cache_capacity();
+
+    // ── 数据正确性验证 ────────────────────────────────────
+    bool data_ok = true;
+    if (!slice_x.empty()) {
+        size_t slice_elems = static_cast<size_t>(dim_y * dim_z);
+        std::vector<float> ref_slice(slice_elems);
+        size_t read_bytes = reader.read_region(
+            mid_x, mid_x + 1, 0, dim_y, 0, dim_z, ref_slice.data());
+        if (read_bytes == slice_elems * elem_size) {
+            for (size_t j = 0; j < slice_elems && data_ok; ++j) {
+                if (std::fabs(slice_x[j] - ref_slice[j]) > 1e-5f) {
+                    data_ok = false;
+                }
+            }
+        } else {
+            data_ok = false;
+        }
+    }
+
+    cache_reader.close();
+
+    // ── Flush 后用 C3DRReader 验证写入数据 ─────────────────
+    if (write_ok) {
+        C3DRReader verify_reader;
+        if (verify_reader.open(tmp_path)) {
+            auto verify = verify_reader.read_x_slice(static_cast<uint32_t>(mid_x));
+            if (verify.size() != slice_x.size()) {
+                write_ok = false;
+            } else {
+                for (size_t j = 0; j < verify.size() && write_ok; ++j) {
+                    if (std::fabs(verify[j] - slice_x[j]) > 1e-5f) {
+                        write_ok = false;
+                    }
+                }
+            }
+            verify_reader.close();
+        }
+    }
+    result.write_ok = write_ok;
+
+    std::remove(tmp_path.c_str());
+
+    // ── 输出报告 ──────────────────────────────────────────
+    bool storage_ok = result.storage_ratio <= MAX_STORAGE_RATIO;
+    result.passed = storage_ok && data_ok && write_ok && cow_ok;
+
+    std::printf("\n========== 切面读取性能回归 (Cache) ==========\n");
+    std::printf("  数据维度:         %llu × %llu × %llu\n",
+        static_cast<unsigned long long>(dim_x),
+        static_cast<unsigned long long>(dim_y),
+        static_cast<unsigned long long>(dim_z));
+    std::printf("  切块形状:         %d × %d × %d\n", shape.cx, shape.cy, shape.cz);
+    std::printf("  缓存容量:         %.1f MB\n",
+        static_cast<double>(cache_size_bytes) / (1024.0 * 1024.0));
+    std::printf("  存储膨胀率:       %.4f  (%s)\n",
+        result.storage_ratio,
+        storage_ok ? "通过" : "超标");
+    std::printf("-----------------------------------------------\n");
+    std::printf("  ── 读测试 ─────────────────────────────────────\n");
+    std::printf("  X 切面 (%llu):    %.3f ms\n",
+        static_cast<unsigned long long>(mid_x), result.tx_ms);
+    std::printf("  Y 切面 (%llu):    %.3f ms\n",
+        static_cast<unsigned long long>(mid_y), result.ty_ms);
+    std::printf("  Z 切面 (%llu):    %.3f ms\n",
+        static_cast<unsigned long long>(mid_z), result.tz_ms);
+    std::printf("  均衡比(max/min):  %.4f\n", result.balance_ratio);
+    std::printf("  ── 写测试 ─────────────────────────────────────\n");
+    std::printf("  写 X 切面耗时:    %.3f ms\n", result.write_ms);
+    std::printf("  写后读一致:       %s\n", result.write_ok ? "通过" : "失败");
+    std::printf("  COW 安全性:       %s\n", result.cow_ok ? "通过" : "失败");
+    std::printf("  ── Flush 测试 ─────────────────────────────────\n");
+    std::printf("  Flush 耗时:       %.3f ms\n", result.flush_ms);
+    std::printf("  ── 缓存统计 ───────────────────────────────────\n");
+    std::printf("  命中:             %zu\n", result.hits);
+    std::printf("  未命中:           %zu\n", result.misses);
+    size_t total_access = result.hits + result.misses;
+    double hit_rate = (total_access > 0) ? (static_cast<double>(result.hits) / total_access * 100.0) : 0.0;
+    std::printf("  命中率:            %.1f%%\n", hit_rate);
+    std::printf("  脏块数:           %zu\n", result.dirty_chunks);
+    std::printf("  缓存内存:         %.1f / %.1f MB\n",
+        static_cast<double>(result.cache_mem_usage) / (1024.0 * 1024.0),
+        static_cast<double>(result.cache_capacity) / (1024.0 * 1024.0));
+    std::printf("  ── 数据正确性 ─────────────────────────────────\n");
+    std::printf("  读数据一致:       %s\n", data_ok ? "通过" : "失败");
+    std::printf("  写后落盘一致:     %s\n", result.write_ok ? "通过" : "失败");
+    std::printf("===============================================\n\n");
 
     return result;
 }

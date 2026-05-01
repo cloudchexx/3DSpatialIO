@@ -1,4 +1,5 @@
 #include "args.h"
+#include "cache_reader.h"
 #include "chunk_io.h"
 #include "chunk_optimizer.h"
 #include "file_io.h"
@@ -118,9 +119,8 @@ int main(int argc, char* argv[]) {
 
         // ── 可选: 切面读取性能回归（流式架构，TODO 6） ──────
         if (args.do_bench) {
-            // 使用流式 reader 写入临时 .c3dr 并测量各轴切面读取耗时
-            // 内存占用仅 nc_z 个 chunk 缓冲区 + 一个切面大小，不与数据总量挂钩
-            benchmark_slices(reader, best, "temp_bench.c3dr");
+            size_t cache_bytes = args.cache_size_mb * 1024ULL * 1024ULL;
+            benchmark_slices_cache(reader, best, "temp_bench.c3dr", cache_bytes);
         }
 
         // 所有操作完成后关闭源文件读取器

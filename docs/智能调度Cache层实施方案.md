@@ -892,49 +892,67 @@ cache_reader.open(tmp_path);
 
 ### Phase 1：重构 C3DRReader
 
-- [ ] **TODO 1.1** — `include/chunk_io.h`：`~C3DRReader()` → `virtual ~C3DRReader()`
-- [ ] **TODO 1.2** — `include/chunk_io.h`：新增 `#include <memory>`
-- [ ] **TODO 1.3** — `include/chunk_io.h`：`read_chunk_by_index` → `protected virtual`，返回 `shared_ptr<const vector<float>>`
-- [ ] **TODO 1.4** — `include/chunk_io.h`：`m_file` 从 `private` → `protected`
-- [ ] **TODO 1.5** — `include/chunk_io.h`：新增 `m_chunk_bytes` + `chunk_bytes()` getter
-- [ ] **TODO 1.6** — `src/chunk_io.cpp`：`open()` 初始化 `m_chunk_bytes`
-- [ ] **TODO 1.7** — `src/chunk_io.cpp`：`read_chunk_by_index` 适配 shared_ptr
-- [ ] **TODO 1.8** — `src/chunk_io.cpp`：`read_chunk` 解引用 shared_ptr
-- [ ] **TODO 1.9** — `src/chunk_io.cpp`：`read_x_slice` 适配 `chunk->` / `(*chunk)[]`
-- [ ] **TODO 1.10** — `src/chunk_io.cpp`：`read_y_slice` 同上
-- [ ] **TODO 1.11** — `src/chunk_io.cpp`：`read_z_slice` 同上
-- [ ] **TODO 1.12** — 编译验证 + 全量测试通过
+- [x] **TODO 1.1** — `include/chunk_io.h`：`~C3DRReader()` → `virtual ~C3DRReader()`
+- [x] **TODO 1.2** — `include/chunk_io.h`：新增 `#include <memory>`
+- [x] **TODO 1.3** — `include/chunk_io.h`：`read_chunk_by_index` → `protected virtual`，返回 `shared_ptr<const vector<float>>`
+- [x] **TODO 1.4** — `include/chunk_io.h`：`m_file` 从 `private` → `protected`
+- [x] **TODO 1.5** — `include/chunk_io.h`：新增 `m_chunk_bytes` + `chunk_bytes()` getter
+- [x] **TODO 1.6** — `src/chunk_io.cpp`：`open()` 初始化 `m_chunk_bytes`
+- [x] **TODO 1.7** — `src/chunk_io.cpp`：`read_chunk_by_index` 适配 shared_ptr
+- [x] **TODO 1.8** — `src/chunk_io.cpp`：`read_chunk` 解引用 shared_ptr
+- [x] **TODO 1.9** — `src/chunk_io.cpp`：`read_x_slice` 适配 `chunk->` / `(*chunk)[]`
+- [x] **TODO 1.10** — `src/chunk_io.cpp`：`read_y_slice` 同上
+- [x] **TODO 1.11** — `src/chunk_io.cpp`：`read_z_slice` 同上
+- [x] **TODO 1.12** — 编译验证 + 全量测试通过
 
 ### Phase 2：C3DRCacheReader 读写核心
 
-- [ ] **TODO 2.1** — 新增 `include/cache_reader.h`：完整类声明（含 CacheEntry、is_dirty、写接口、flush）
-- [ ] **TODO 2.2** — 新增 `src/cache_reader.cpp`：生命周期（含 r+b 重开 + 析构 flush）
-- [ ] **TODO 2.3** — 实现 `read_chunk_by_index` 覆写：缓存查找 → 磁盘加载 → 插入缓存 → LRU
-- [ ] **TODO 2.4** — 实现 `evict_if_needed`：脏块先 flush 再淘汰
-- [ ] **TODO 2.5** — 实现 `write_chunk_in_cache`（use_count==1 就地修改 → COW 回退）
-- [ ] **TODO 2.6** — 实现 `write_x_slice` / `write_y_slice` / `write_z_slice`
-- [ ] **TODO 2.7** — 实现 `flush` / `flush_chunk`（脏块落盘）
-- [ ] **TODO 2.8** — 实现 `read_x/y/z_slice`（隐藏基类 + maybe_prefetch）
-- [ ] **TODO 2.9** — 实现 `maybe_prefetch` / `compute_needed_chunks` / `do_prefetch`
-- [ ] **TODO 2.10** — 编译验证
+- [x] **TODO 2.1** — 新增 `include/cache_reader.h`：完整类声明（含 CacheEntry、is_dirty、写接口、flush、PatchItem 批量写）
+- [x] **TODO 2.2** — 新增 `src/cache_reader.cpp`：生命周期（含 r+b 重开 + 析构 flush）
+- [x] **TODO 2.3** — 实现 `read_chunk_by_index` 覆写：缓存查找 → 磁盘加载 → 插入缓存 → LRU
+- [x] **TODO 2.4** — 实现 `evict_if_needed`：脏块先 flush 再淘汰
+- [x] **TODO 2.5** — 实现 `write_chunk_in_cache`（use_count==1 就地修改 → COW 回退）+ `write_chunk_in_cache_batch` 批量写
+- [x] **TODO 2.6** — 实现 `write_x_slice` / `write_y_slice` / `write_z_slice`（Y/Z 使用 batch 减少锁开销）
+- [x] **TODO 2.7** — 实现 `flush` / `flush_chunk`（脏块落盘）
+- [x] **TODO 2.8** — 实现 `read_x/y/z_slice`（隐藏基类 + maybe_prefetch）
+- [x] **TODO 2.9** — 实现 `maybe_prefetch` / `compute_needed_chunks` / `do_prefetch`
+- [x] **TODO 2.10** — 编译验证
 
 ### Phase 3：CLI 集成
 
-- [ ] **TODO 3.1** — `include/args.h` 新增 `cache_size_mb`
-- [ ] **TODO 3.2** — `src/args.cpp` 新增 `--cache-size`
-- [ ] **TODO 3.3** — `src/main.cpp` benchmark 改用 C3DRCacheReader
-- [ ] **TODO 3.4** — `src/main.cpp` benchmark 结束后输出 cache 统计
-- [ ] **TODO 3.5** — `include/profiler.h` / `src/profiler.cpp` 增加缓存读写测试
-- [ ] **TODO 3.6** — 编译验证
+- [x] **TODO 3.1** — `include/args.h` 新增 `cache_size_mb`
+- [x] **TODO 3.2** — `src/args.cpp` 新增 `--cache-size`
+- [x] **TODO 3.3** — `src/main.cpp` benchmark 改用 C3DRCacheReader
+- [x] **TODO 3.4** — `src/main.cpp` benchmark 结束后输出 cache 统计
+- [x] **TODO 3.5** — `include/profiler.h` / `src/profiler.cpp` 增加缓存读写测试
+- [x] **TODO 3.6** — 编译验证
 
 ### Phase 4：测试
 
-- [ ] **TODO 4.1** — 测试 1~5：生命周期 + 读正确性 + 命中计数 + LRU + 内存上限
-- [ ] **TODO 4.2** — 测试 6~10：写正确性 + 写后读 + COW 安全 + 脏淘汰 + flush 幂等
-- [ ] **TODO 4.3** — 测试 11~12：预取 + 不同缓存大小
-- [ ] **TODO 4.4** — `CMakeLists.txt` 添加 `cache_reader.cpp` 源文件 + `test_cache_reader` 测试目标
-- [ ] **TODO 4.5** — 全量测试通过
-- [ ] **TODO 4.6** — 端到端验证：18GB 数据 benchmark 对比（有/无 cache 的读写耗时）
+- [x] **TODO 4.1** — 测试 1~5：生命周期 + 读正确性 + 命中计数 + LRU + 内存上限
+- [x] **TODO 4.2** — 测试 6~10：写正确性 + 写后读 + COW 安全 + 脏淘汰 + flush 幂等
+- [x] **TODO 4.3** — 测试 11~12：预取 + 不同缓存大小
+- [x] **TODO 4.4** — `CMakeLists.txt` 添加 `cache_reader.cpp` 源文件 + `test_cache_reader` 测试目标
+- [x] **TODO 4.5** — 全量测试通过
+- [x] **TODO 4.6** — 端到端验证：18GB 数据 benchmark 对比（有/无 cache 的读写耗时）
+
+### 端到端 Benchmark 结果（18GB 数据：800×2404×2500，切块 32×256×16，缓存 2GB）
+
+| 测试项 | 无 Cache | 有 Cache | 加速比 |
+|--------|---------|---------|--------|
+| 连续 X[0..31] (avg/slice) | 173.94 ms | 43.24 ms | **4.0×** |
+| 连续 Y[0..7] (avg/slice) | 460.61 ms | 85.33 ms | **5.4×** |
+| 连续 Z[0..15] (avg/slice) | 29.80 ms | 14.95 ms | **2.0×** |
+| 单次 X[400] | 377.3 ms | 197.2 ms | **1.9×** |
+| 单次 Y[1202] | 1046.6 ms | 572.9 ms | **1.8×** |
+| 单次 Z[1250] | 115.3 ms | 36.5 ms | **3.2×** |
+
+- **命中率**: 86.5%（80622 hit / 93181 total）
+- **写 X[0]**: 268.0 ms（1570 脏块）
+- **写后读 X[0]**: 17.6 ms（一致性: 通过）
+- **Flush**: 296.8 ms
+- **COW 安全性**: 通过
+- **Flush 落盘一致性**: 通过
 
 ---
 

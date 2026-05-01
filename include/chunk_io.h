@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -52,7 +53,7 @@ C3DRHeader write_c3dr_file_stream(
 class C3DRReader {
 public:
     C3DRReader();
-    ~C3DRReader();
+    virtual ~C3DRReader();
 
     // 不允许拷贝 / 移动（持有 FILE* 资源）
     C3DRReader(const C3DRReader&) = delete;
@@ -77,6 +78,7 @@ public:
     uint32_t            num_chunks_x()  const { return m_nc_x; }
     uint32_t            num_chunks_y()  const { return m_nc_y; }
     uint32_t            num_chunks_z()  const { return m_nc_z; }
+    size_t              chunk_bytes()   const { return m_chunk_bytes; }
 
     // 各方向填充后总尺寸
     uint64_t padded_dim_x() const { return static_cast<uint64_t>(m_nc_x) * m_header.chunk_shape.cx; }
@@ -101,14 +103,15 @@ public:
     // 返回 cx × cy × cz 个 float（含补零填充部分）
     std::vector<float> read_chunk(uint32_t ix, uint32_t iy, uint32_t iz);
 
-private:
-    // 按 chunk 线性索引读取
-    std::vector<float> read_chunk_by_index(uint64_t chunk_idx);
+protected:
+    virtual std::shared_ptr<const std::vector<float>>
+        read_chunk_by_index(uint64_t chunk_idx);
 
     C3DRHeader                  m_header;
-    std::vector<C3DRIndexEntry> m_index;   // 索引表（按块行优先排列）
+    std::vector<C3DRIndexEntry> m_index;
     FILE*                       m_file;
-    uint32_t                    m_nc_x;    // X 方向块数  ceil(dim_x / cx)
-    uint32_t                    m_nc_y;    // Y 方向块数  ceil(dim_y / cy)
-    uint32_t                    m_nc_z;    // Z 方向块数  ceil(dim_z / cz)
+    uint32_t                    m_nc_x;
+    uint32_t                    m_nc_y;
+    uint32_t                    m_nc_z;
+    size_t                      m_chunk_bytes;
 };

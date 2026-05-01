@@ -20,6 +20,7 @@ set(SOURCES
     src/file_io.cpp
     src/chunk_optimizer.cpp
     src/chunk_io.cpp
+    src/cache_reader.cpp
     src/profiler.cpp
 )
 
@@ -42,6 +43,23 @@ add_executable(test_chunk_io
 )
 target_include_directories(test_chunk_io PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+add_executable(test_cache_reader
+    tests/test_cache_reader.cpp
+    src/chunk_optimizer.cpp
+    src/chunk_io.cpp
+    src/cache_reader.cpp
+)
+target_include_directories(test_cache_reader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(bench_e2e
+    bench_e2e.cpp
+    src/chunk_optimizer.cpp
+    src/chunk_io.cpp
+    src/cache_reader.cpp
+)
+target_include_directories(bench_e2e PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 enable_testing()
 add_test(NAME chunk_optimizer COMMAND test_chunk_optimizer)
 add_test(NAME chunk_io       COMMAND test_chunk_io)
+add_test(NAME cache_reader   COMMAND test_cache_reader)
