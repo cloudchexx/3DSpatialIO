@@ -20,10 +20,30 @@ import io
 import os
 import subprocess
 import sys
+from datetime import datetime
+
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
 
 if sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+
+def write_both(log_fp, text=""):
+    print(text)
+    log_fp.write(text + "\n")
+    log_fp.flush()
+
+
+def run_cmd(cmd, log_fp):
+    write_both(log_fp, f"执行: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.stdout:
+        write_both(log_fp, result.stdout.rstrip())
+    if result.stderr:
+        write_both(log_fp, result.stderr.rstrip())
+    return result
 
 
 def main():
@@ -57,54 +77,63 @@ def main():
             sys.exit(1)
 
     c3dr_path = args.input + ".c3dr"
+    log_path = os.path.join(log_dir, args.input + "_results_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".txt")
 
-    print("=" * 50)
-    print("三维数据评分基准测试")
-    print("=" * 50)
-    print(f"输入文件:   {args.input}")
-    print(f"数据维度:   {args.dim_x} × {args.dim_y} × {args.dim_z}")
-    print(f"缓存大小:   {args.cache_size} MB")
-    print(f"输出文件:   {args.output}")
-    print("=" * 50)
+    with open(log_path, "w", encoding="utf-8") as log_fp:
+        write_both(log_fp, "=" * 50)
+        write_both(log_fp, "三维数据评分基准测试")
+        write_both(log_fp, f"测试时间:   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        write_both(log_fp, "=" * 50)
+        write_both(log_fp, f"输入文件:   {args.input}")
+        write_both(log_fp, f"数据维度:   {args.dim_x} × {args.dim_y} × {args.dim_z}")
+        write_both(log_fp, f"缓存大小:   {args.cache_size} MB")
+        write_both(log_fp, f"输出文件:   {args.output}")
+        write_both(log_fp, f"日志文件:   {log_path}")
+        write_both(log_fp, "=" * 50)
 
-    # Step 1: 落盘 (如尚未存在)
-    if not os.path.exists(c3dr_path):
-        print(f"\n[1/2] 切块落盘...")
+        write_both(log_fp)
+
+        # Step 1: 落盘 (如尚未存在)
+        if not os.path.exists(c3dr_path):
+            write_both(log_fp, "[1/2] 切块落盘...")
+            cmd = [
+                cc_exe, "-i", args.input,
+                "--dim-x", str(args.dim_x),
+                "--dim-y", str(args.dim_y),
+                "--dim-z", str(args.dim_z),
+                "--skip-bytes", str(args.skip_bytes)
+            ]
+            result = run_cmd(cmd, log_fp)
+            if result.returncode != 0:
+                write_both(log_fp, "[!] 落盘失败")
+                sys.exit(1)
+        else:
+            write_both(log_fp, "[1/2] 落盘文件已存在: " + c3dr_path)
+
+        write_both(log_fp)
+
+        # Step 2: 评分测试
+        write_both(log_fp, "[2/2] 运行评分测试...")
         cmd = [
-            cc_exe, "-i", args.input,
-            "--dim-x", str(args.dim_x),
-            "--dim-y", str(args.dim_y),
-            "--dim-z", str(args.dim_z),
-            "--skip-bytes", str(args.skip_bytes)
+            bench_exe, c3dr_path,
+            "--output", args.output,
+            "--cache-size", str(args.cache_size)
         ]
-        print(f"执行: {' '.join(cmd)}")
-        result = subprocess.run(cmd)
+        result = run_cmd(cmd, log_fp)
         if result.returncode != 0:
-            print(f"[!] 落盘失败")
+            write_both(log_fp, "[!] 测试失败")
             sys.exit(1)
-    else:
-        print(f"\n[1/2] 落盘文件已存在: {c3dr_path}")
 
-    # Step 2: 评分测试
-    print(f"\n[2/2] 运行评分测试...")
-    cmd = [
-        bench_exe, c3dr_path,
-        "--output", args.output,
-        "--cache-size", str(args.cache_size)
-    ]
-    print(f"执行: {' '.join(cmd)}")
-    result = subprocess.run(cmd)
-    if result.returncode != 0:
-        print(f"[!] 测试失败")
-        sys.exit(1)
+        write_both(log_fp)
 
-    # 检查输出文件
-    if os.path.exists(args.output):
-        size_bytes = os.path.getsize(args.output)
-        size_gb = size_bytes / (1024 ** 3)
-        print(f"\n输出文件大小: {size_gb:.2f} GB ({size_bytes} bytes)")
+        # 检查输出文件
+        if os.path.exists(args.output):
+            size_bytes = os.path.getsize(args.output)
+            size_gb = size_bytes / (1024 ** 3)
+            write_both(log_fp, f"输出文件大小: {size_gb:.2f} GB ({size_bytes} bytes)")
 
-    print("\n完成!")
+        write_both(log_fp)
+        write_both(log_fp, "完成!")
 
 
 if __name__ == "__main__":
